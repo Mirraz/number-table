@@ -94,8 +94,7 @@ typedef union {
 } number_value_union;
 
 // TODO: endianness
-int fscan_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, uint8_t bytes[NUM_SIZE_MAX]) {
-	number_value_union *buffer = (number_value_union *)bytes;
+int fscan_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, number_value_union *buffer) {
 	if (is_signed) {
 		switch (num_size_exp) {
 			case 0: return fscanf(stream, "%" SCNd8,  &(buffer->sint8));
@@ -120,8 +119,7 @@ int fscan_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, uint8_
 }
 
 // TODO: endianness
-int fprint_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, const uint8_t bytes[NUM_SIZE_MAX]) {
-	const number_value_union *buffer = (const number_value_union *)bytes;
+int fprint_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, const number_value_union *buffer) {
 	if (is_signed) {
 		switch (num_size_exp) {
 			case 0: return fprintf(stream, "%" PRId8,  buffer->sint8);
@@ -152,9 +150,9 @@ void encode(field_struct fields[], size_t fields_count) {
 		size_t idx;
 		for (idx=0; idx<fields_count; ++idx) {
 			// TODO: delta
-			static uint8_t num_buffer[NUM_SIZE_MAX];
+			number_value_union num_buffer;
 			field_struct *field = &fields[idx];
-			int scanf_res = fscan_number(stdin, field->is_signed, field->num_size_exp, num_buffer);
+			int scanf_res = fscan_number(stdin, field->is_signed, field->num_size_exp, &num_buffer);
 			if (scanf_res != 1) {
 				if (ferror(stdin)) {
 					perror("scanf");
@@ -164,7 +162,7 @@ void encode(field_struct fields[], size_t fields_count) {
 				fprintf(stderr, "Error: wrong input\n");
 				exit(EXIT_FAILURE);
 			}
-			size_t fwrite_res = fwrite(num_buffer, num_sizes[field->num_size_exp], 1, stdout);
+			size_t fwrite_res = fwrite(num_buffer.bytes, num_sizes[field->num_size_exp], 1, stdout);
 			if (fwrite_res != 1) {
 				perror("fwrite");
 				exit(EXIT_FAILURE);
@@ -181,15 +179,15 @@ void decode(field_struct fields[], size_t fields_count) {
 		size_t idx;
 		for (idx=0; idx<fields_count; ++idx) {
 			// TODO: delta
-			static uint8_t num_buffer[NUM_SIZE_MAX];
+			number_value_union num_buffer;
 			field_struct *field = &fields[idx];
-			size_t fread_res = fread(num_buffer, num_sizes[field->num_size_exp], 1, stdin);
+			size_t fread_res = fread(num_buffer.bytes, num_sizes[field->num_size_exp], 1, stdin);
 			if (fread_res != 1) {
 				if (feof(stdin) && ! ferror(stdin)) return;
 				perror("fread");
 				exit(EXIT_FAILURE);
 			}
-			if (fprint_number(stdout, field->is_signed, field->num_size_exp, num_buffer) < 0)
+			if (fprint_number(stdout, field->is_signed, field->num_size_exp, &num_buffer) < 0)
 				goto print_printf_err_and_exit;
 			if (idx != fields_count-1) {
 				if (printf("\t") < 0) goto print_printf_err_and_exit;
