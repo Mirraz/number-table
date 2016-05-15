@@ -101,9 +101,7 @@ int fscan_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, number
 			case 1: return fscanf(stream, "%" SCNd16, &(buffer->sint16));
 			case 2: return fscanf(stream, "%" SCNd32, &(buffer->sint32));
 			case 3: return fscanf(stream, "%" SCNd64, &(buffer->sint64));
-			default:
-				assert(0);
-				exit(EXIT_FAILURE);
+			default: assert(0);
 		}
 	} else {
 		switch (num_size_exp) {
@@ -111,9 +109,7 @@ int fscan_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, number
 			case 1: return fscanf(stream, "%" SCNu16, &(buffer->uint16));
 			case 2: return fscanf(stream, "%" SCNu32, &(buffer->uint32));
 			case 3: return fscanf(stream, "%" SCNu64, &(buffer->uint64));
-			default:
-				assert(0);
-				exit(EXIT_FAILURE);
+			default: assert(0);
 		}
 	}
 }
@@ -126,9 +122,7 @@ int fprint_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, const
 			case 1: return fprintf(stream, "%" PRId16, buffer->sint16);
 			case 2: return fprintf(stream, "%" PRId32, buffer->sint32);
 			case 3: return fprintf(stream, "%" PRId64, buffer->sint64);
-			default:
-				assert(0);
-				exit(EXIT_FAILURE);
+			default: assert(0);
 		}
 	} else {
 		switch (num_size_exp) {
@@ -136,9 +130,7 @@ int fprint_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, const
 			case 1: return fprintf(stream, "%" PRIu16, buffer->uint16);
 			case 2: return fprintf(stream, "%" PRIu32, buffer->uint32);
 			case 3: return fprintf(stream, "%" PRIu64, buffer->uint64);
-			default:
-				assert(0);
-				exit(EXIT_FAILURE);
+			default: assert(0);
 		}
 	}
 }
