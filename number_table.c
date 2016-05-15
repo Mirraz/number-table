@@ -24,6 +24,7 @@ typedef struct {
 	uint_fast8_t num_size_exp;
 	uint_fast8_t delta_size_exp;
 	bool is_signed;
+	bool delta_is_signed;
 	bool is_delta;
 } field_struct;
 
@@ -45,6 +46,7 @@ ssize_t parse_format(const char *fields_format, field_struct fields[], size_t fi
 		offset += read_chars;
 		
 		if (!(sign == SIGNED_CHAR || sign == UNSIGNED_CHAR)) return -1;
+		bool is_signed = (sign == SIGNED_CHAR);
 		if (size & 7) return -1; // if (size % 8 != 0)
 		uint_fast8_t num_size = size / 8;
 		uint_fast8_t num_size_exp;
@@ -53,17 +55,18 @@ ssize_t parse_format(const char *fields_format, field_struct fields[], size_t fi
 		
 		field_struct *field = &fields[fields_count];
 		if (! is_reading_delta) {
-			field->is_signed = (sign == SIGNED_CHAR);
+			field->is_signed = is_signed;
 			field->num_size_exp = num_size_exp;
 			field->is_delta = false;
-			++fields_count;
 		} else {
 			field->is_delta = true;
 			field->delta_size_exp = num_size_exp;
+			field->delta_is_signed = is_signed;
 		}
 		
 		res = sscanf(fields_format+offset, "%c%n", &sep, &read_chars);
 		if (res == EOF) {
+			++fields_count;
 			assert(fields_count > 0 && fields_count <= fields_size);
 			return fields_count;
 		}
@@ -75,6 +78,7 @@ ssize_t parse_format(const char *fields_format, field_struct fields[], size_t fi
 			is_reading_delta = true;
 		} else if (sep == ',') {
 			is_reading_delta = false;
+			++fields_count;
 		} else {
 			return -1;
 		}
