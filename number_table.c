@@ -148,12 +148,65 @@ int im_sub(int_max_type *result, const int_max_type *minuend, const int_max_type
 			srs = urs;
 		}
 		result->value.s = srs;
-		return 0;
 	} else {
 		if (result_is_neg) return 1;
 		result->value.u = urs;
-		return 0;
 	}
+	return 0;
+}
+
+int im_add_delta(int_max_type *result, const int_max_type *prev, const int_max_type *delta) {
+	assert(result->is_signed == prev->is_signed);
+	if (prev->is_signed) {
+		sint_max_type spv = prev->value.s;
+		sint_max_type srs;
+		if (delta->is_signed) {
+			sint_max_type sdl = delta->value.s;
+			if ((sdl < 0 && spv < SINT_MAX_TYPE_MIN - sdl) || (sdl > 0 && spv > SINT_MAX_TYPE_MAX - sdl)) return 1;
+			srs = spv + sdl;
+		} else {
+			uint_max_type udl = delta->value.u;
+			if (spv < 0) {
+				uint_max_type upv = (spv == SINT_MAX_TYPE_MIN ? SINT_MAX_TYPE_MIN_ABS : (uint_max_type)(-spv));
+				// rs = udl - upv
+				if (udl < upv) {
+					uint_max_type urs = upv - udl;
+					if (urs > SINT_MAX_TYPE_MIN_ABS) return 1;
+					srs = (urs == SINT_MAX_TYPE_MIN_ABS ? SINT_MAX_TYPE_MIN : -((sint_max_type)urs));
+				} else {
+					uint_max_type urs = udl - upv;
+					if (urs > SINT_MAX_TYPE_MAX) return 1;
+					srs = urs;
+				}
+			} else {
+				uint_max_type upv = spv;
+				if (upv > ((uint_max_type)SINT_MAX_TYPE_MAX) - udl) return 1;
+				srs = upv + udl;
+			}
+		}
+		result->value.s = srs;
+	} else {
+		uint_max_type upv = prev->value.u;
+		uint_max_type urs;
+		if (delta->is_signed) {
+			sint_max_type sdl = delta->value.s;
+			if (sdl < 0) {
+				uint_max_type udl = (sdl == SINT_MAX_TYPE_MIN ? SINT_MAX_TYPE_MIN_ABS : (uint_max_type)(-sdl));
+				if (upv < udl) return 1;
+				urs = upv - udl;
+			} else {
+				uint_max_type udl = sdl;
+				if (upv > UINT_MAX_TYPE_MAX - udl) return 1;
+				urs = upv + udl;
+			}
+		} else {
+			uint_max_type udl = delta->value.u;
+			if (upv > UINT_MAX_TYPE_MAX - udl) return 1;
+			urs = upv + udl;
+		}
+		result->value.u = urs;
+	}
+	return 0;
 }
 
 int im_fscan(int_max_type *im, FILE *stream) {
@@ -315,6 +368,7 @@ void encode(field_struct fields[], size_t fields_count) {
 				im_out_num_size_exp = field->num_size_exp;
 			}
 			
+			// save im_in as previous
 			if (field->is_delta) {
 				memcpy(&(field->prev_value), &im_in, sizeof(im_in));
 			}
@@ -348,7 +402,8 @@ void decode(field_struct fields[], size_t fields_count) {
 			
 			// input bytes
 			uint8_t bytes_in[NUM_SIZE_MAX];
-			uint_fast8_t im_in_num_size_exp = (fields->is_delta ? field->delta_size_exp : field->num_size_exp);
+			uint_fast8_t im_in_num_size_exp = (field->is_delta && !is_first ? field->delta_size_exp : field->num_size_exp);
+			bool im_in_is_signed = (field->is_delta && !is_first ? field->delta_is_signed : field->is_signed);
 			size_t fread_res = fread(bytes_in, num_sizes[im_in_num_size_exp], 1, stdin);
 			if (fread_res != 1) {
 				if (feof(stdin) && ! ferror(stdin)) return;
@@ -358,15 +413,25 @@ void decode(field_struct fields[], size_t fields_count) {
 			
 			// bytes to im
 			int_max_type im_in;
-			im_in.is_signed = (fields->is_delta ? field->delta_is_signed : field->is_signed);
+			im_in.is_signed = im_in_is_signed;
 			im_from_bytes(&im_in, im_in_num_size_exp, bytes_in);
 			
 			// delta
 			int_max_type im_out;
-			if (fields->is_delta) {
-				// TODO
+			if (field->is_delta && !is_first) {
+				im_out.is_signed = field->is_signed;
+				int res = im_add_delta(&im_out, &(field->prev_value), &im_in);
+				if (res) {
+					fprintf(stderr, "Error: delta overflow\n");
+					exit(EXIT_FAILURE);
+				}
 			} else {
 				memcpy(&im_out, &im_in, sizeof(im_out));
+			}
+			
+			// save im_out as previous
+			if (field->is_delta) {
+				memcpy(&(field->prev_value), &im_out, sizeof(im_out));
 			}
 			
 			// output text
