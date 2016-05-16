@@ -1,9 +1,12 @@
+#define _BSD_SOURCE
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
+#include <memory.h>
+#include <endian.h>
 #include <unistd.h> // getopt, ssize_t
 #include <limits.h> // SSIZE_MAX
 
@@ -16,8 +19,29 @@
 const uint_fast8_t num_sizes[NUM_SIZES_COUNT] = {1, 2, 4, 8};
 #define NUM_SIZE_MAX 8
 
+typedef uint64_t uint_max_type;
+typedef  int64_t sint_max_type;
+#define UINT_MAX_TYPE_MAX UINT64_MAX
+#define SINT_MAX_TYPE_MIN_ABS ((uint_max_type)INT64_MAX+1)
+#define SINT_MAX_TYPE_MIN INT64_MIN
+#define SINT_MAX_TYPE_MAX INT64_MAX
+const char SCN_SINT_MAX_TYPE[] = "%" SCNd64;
+const char SCN_UINT_MAX_TYPE[] = "%" SCNu64;
+const char PRI_SINT_MAX_TYPE[] = "%" PRId64;
+const char PRI_UINT_MAX_TYPE[] = "%" PRIu64;
+
+typedef union {
+	uint_max_type u;
+	sint_max_type s;
+} int_max_union;
+
 typedef struct {
-	uint8_t prev_num_buffer[NUM_SIZE_MAX];
+	int_max_union value;
+	bool is_signed;
+} int_max_type;
+
+typedef struct {
+	int_max_type prev_value;
 	// num_size -- number value size in bytes (1,2,4,8)
 	// num_size_exp = log2(num_size) (0,1,2,3)
 	// num_size = num_sizes[num_size_exp]
@@ -85,58 +109,172 @@ ssize_t parse_format(const char *fields_format, field_struct fields[], size_t fi
 	}
 }
 
-typedef union {
-	//uint8_t bytes[NUM_SIZE_MAX];
-	uint64_t uint64;
-	 int64_t sint64;
-	uint32_t uint32;
-	 int32_t sint32;
-	uint16_t uint16;
-	 int16_t sint16;
-	uint8_t uint8;
-	 int8_t sint8;
-} number_value_union;
-
-// TODO: endianness
-int fscan_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, number_value_union *buffer) {
-	if (is_signed) {
-		switch (num_size_exp) {
-			case 0: return fscanf(stream, "%" SCNd8,  &(buffer->sint8));
-			case 1: return fscanf(stream, "%" SCNd16, &(buffer->sint16));
-			case 2: return fscanf(stream, "%" SCNd32, &(buffer->sint32));
-			case 3: return fscanf(stream, "%" SCNd64, &(buffer->sint64));
-			default: assert(0);
+int im_sub(int_max_type *result, const int_max_type *minuend, const int_max_type *subtrahend) {
+	assert(minuend->is_signed == subtrahend->is_signed);
+	uint_max_type urs;
+	bool result_is_neg;
+	if (minuend->is_signed) {
+		sint_max_type mn = minuend->value.s;
+		sint_max_type sb = subtrahend->value.s;
+		result_is_neg = (mn < sb);
+		if (result_is_neg) {
+			sint_max_type tmp = mn; mn = sb; sb = tmp;
+		}
+		if (mn >= 0 && sb < 0) {
+			if (sb == SINT_MAX_TYPE_MIN) {
+				if (mn == SINT_MAX_TYPE_MAX) return 1;
+				else urs = (uint_max_type)mn + SINT_MAX_TYPE_MIN_ABS;
+			} else {
+				urs = (uint_max_type)mn + (uint_max_type)(-sb);
+			}
+		} else {
+			urs = mn - sb;
 		}
 	} else {
-		switch (num_size_exp) {
-			case 0: return fscanf(stream, "%" SCNu8,  &(buffer->uint8));
-			case 1: return fscanf(stream, "%" SCNu16, &(buffer->uint16));
-			case 2: return fscanf(stream, "%" SCNu32, &(buffer->uint32));
-			case 3: return fscanf(stream, "%" SCNu64, &(buffer->uint64));
-			default: assert(0);
+		uint_max_type mn = minuend->value.u;
+		uint_max_type sb = subtrahend->value.u;
+		result_is_neg = (mn < sb);
+		urs = (result_is_neg ? sb - mn : mn - sb);
+	}
+	
+	if (result->is_signed) {
+		sint_max_type srs;
+		if (result_is_neg) {
+			if (urs > SINT_MAX_TYPE_MIN_ABS) return 1;
+			if (urs == SINT_MAX_TYPE_MIN_ABS) srs = SINT_MAX_TYPE_MIN;
+			else srs = -((sint_max_type)urs);
+		} else {
+			if (urs > SINT_MAX_TYPE_MAX) return 1;
+			srs = urs;
 		}
+		result->value.s = srs;
+		return 0;
+	} else {
+		if (result_is_neg) return 1;
+		result->value.u = urs;
+		return 0;
 	}
 }
 
-// TODO: endianness
-int fprint_number(FILE *stream, bool is_signed, uint_fast8_t num_size_exp, const number_value_union *buffer) {
-	if (is_signed) {
+int im_fscan(int_max_type *im, FILE *stream) {
+	if (im->is_signed) {
+		return fscanf(stream, SCN_SINT_MAX_TYPE, &(im->value.s));
+	} else {
+		return fscanf(stream, SCN_UINT_MAX_TYPE, &(im->value.u));
+	}
+}
+
+int im_fprint(const int_max_type *im, FILE *stream) {
+	if (im->is_signed) {
+		return fprintf(stream, PRI_SINT_MAX_TYPE, im->value.s);
+	} else {
+		return fprintf(stream, PRI_UINT_MAX_TYPE, im->value.u);
+	}
+}
+
+// bytes -- little endian packed integer
+// bytes size == 2^num_size_exp
+void im_from_bytes(int_max_type *im, uint_fast8_t num_size_exp, const uint8_t bytes[]) {
+	switch (num_size_exp) {
+		case 0: {
+			uint8_t uv = *((uint8_t *)bytes);
+			if (im->is_signed) {
+				im->value.s = (int8_t)(*((int8_t *)(&uv)));
+			} else {
+				im->value.u = uv;
+			}
+			break;
+		}
+		case 1: {
+			uint16_t uv = le16toh(*((uint16_t *)bytes));
+			if (im->is_signed) {
+				im->value.s = (int16_t)(*((int16_t *)(&uv)));
+			} else {
+				im->value.u = uv;
+			}
+			break;
+		}
+		case 2: {
+			uint32_t uv = le32toh(*((uint32_t *)bytes));
+			if (im->is_signed) {
+				im->value.s = (int32_t)(*((int32_t *)(&uv)));
+			} else {
+				im->value.u = uv;
+			}
+			break;
+		}
+		case 3: {
+			uint64_t uv = le64toh(*((uint64_t *)bytes));
+			if (im->is_signed) {
+				im->value.s = (int64_t)(*((int64_t *)(&uv)));
+			} else {
+				im->value.u = uv;
+			}
+			break;
+		}
+		default:
+			assert(0);
+	}
+}
+
+// bytes -- little endian packed integer
+// bytes size == 2^num_size_exp
+int im_to_bytes(const int_max_type *im, uint_fast8_t num_size_exp, uint8_t bytes[]) {
+	uint_max_type uv;
+	if (im->is_signed) {
+		sint_max_type sv = im->value.s;
+		uv = *((uint_max_type *)(&sv));
 		switch (num_size_exp) {
-			case 0: return fprintf(stream, "%" PRId8,  buffer->sint8);
-			case 1: return fprintf(stream, "%" PRId16, buffer->sint16);
-			case 2: return fprintf(stream, "%" PRId32, buffer->sint32);
-			case 3: return fprintf(stream, "%" PRId64, buffer->sint64);
-			default: assert(0);
+			case 0:
+				if (!(sv >= INT8_MIN  && sv <= INT8_MAX )) return 1;
+				break;
+			case 1:
+				if (!(sv >= INT16_MIN && sv <= INT16_MAX)) return 1;
+				break;
+			case 2:
+				if (!(sv >= INT32_MIN && sv <= INT32_MAX)) return 1;
+				break;
+			case 3:
+				break;
+			default:
+				assert(0);
 		}
 	} else {
+		uv = im->value.u;
 		switch (num_size_exp) {
-			case 0: return fprintf(stream, "%" PRIu8,  buffer->uint8);
-			case 1: return fprintf(stream, "%" PRIu16, buffer->uint16);
-			case 2: return fprintf(stream, "%" PRIu32, buffer->uint32);
-			case 3: return fprintf(stream, "%" PRIu64, buffer->uint64);
-			default: assert(0);
+			case 0:
+				if (!(uv <= UINT8_MAX )) return 1;
+				break;
+			case 1:
+				if (!(uv <= UINT16_MAX)) return 1;
+				break;
+			case 2:
+				if (!(uv <= UINT32_MAX)) return 1;
+				break;
+			case 3:
+				break;
+			default:
+				assert(0);
 		}
 	}
+	
+	switch (num_size_exp) {
+		case 0:
+			*((uint8_t  *)bytes) = (uint8_t)uv;
+			break;
+		case 1:
+			*((uint16_t *)bytes) = htole16((uint16_t)uv);
+			break;
+		case 2:
+			*((uint32_t *)bytes) = htole32((uint32_t)uv);
+			break;
+		case 3:
+			*((uint64_t *)bytes) = htole64((uint64_t)uv);
+			break;
+		default:
+			assert(0);
+	}
+	return 0;
 }
 
 void encode(field_struct fields[], size_t fields_count) {
@@ -145,10 +283,12 @@ void encode(field_struct fields[], size_t fields_count) {
 	while (true) {
 		size_t idx;
 		for (idx=0; idx<fields_count; ++idx) {
-			// TODO: delta
-			number_value_union num_buffer;
 			field_struct *field = &fields[idx];
-			int scanf_res = fscan_number(stdin, field->is_signed, field->num_size_exp, &num_buffer);
+			
+			// input text
+			int_max_type im_in;
+			im_in.is_signed = field->is_signed;
+			int scanf_res =  im_fscan(&im_in, stdin);
 			if (scanf_res != 1) {
 				if (ferror(stdin)) {
 					perror("scanf");
@@ -158,7 +298,37 @@ void encode(field_struct fields[], size_t fields_count) {
 				fprintf(stderr, "Error: wrong input\n");
 				exit(EXIT_FAILURE);
 			}
-			size_t fwrite_res = fwrite(num_buffer.bytes, num_sizes[field->num_size_exp], 1, stdout);
+			
+			// delta
+			int_max_type im_out;
+			uint_fast8_t im_out_num_size_exp;
+			if (field->is_delta && !is_first) {
+				im_out.is_signed = field->delta_is_signed;
+				int res = im_sub(&im_out, &im_in, &(field->prev_value));
+				if (res) {
+					fprintf(stderr, "Error: delta overflow\n");
+					exit(EXIT_FAILURE);
+				}
+				im_out_num_size_exp = field->delta_size_exp;
+			} else {
+				memcpy(&im_out, &im_in, sizeof(im_out));
+				im_out_num_size_exp = field->num_size_exp;
+			}
+			
+			if (field->is_delta) {
+				memcpy(&(field->prev_value), &im_in, sizeof(im_in));
+			}
+			
+			// im to bytes
+			uint8_t bytes_out[NUM_SIZE_MAX];
+			int im_to_bytes_res = im_to_bytes(&im_out, im_out_num_size_exp, bytes_out);
+			if (im_to_bytes_res) {
+				fprintf(stderr, "Error: output bytes value overflow\n");
+				exit(EXIT_FAILURE);
+			}
+			
+			// output bytes
+			size_t fwrite_res = fwrite(bytes_out, num_sizes[im_out_num_size_exp], 1, stdout);
 			if (fwrite_res != 1) {
 				perror("fwrite");
 				exit(EXIT_FAILURE);
@@ -174,16 +344,33 @@ void decode(field_struct fields[], size_t fields_count) {
 	while (true) {
 		size_t idx;
 		for (idx=0; idx<fields_count; ++idx) {
-			// TODO: delta
-			number_value_union num_buffer;
 			field_struct *field = &fields[idx];
-			size_t fread_res = fread(num_buffer.bytes, num_sizes[field->num_size_exp], 1, stdin);
+			
+			// input bytes
+			uint8_t bytes_in[NUM_SIZE_MAX];
+			uint_fast8_t im_in_num_size_exp = (fields->is_delta ? field->delta_size_exp : field->num_size_exp);
+			size_t fread_res = fread(bytes_in, num_sizes[im_in_num_size_exp], 1, stdin);
 			if (fread_res != 1) {
 				if (feof(stdin) && ! ferror(stdin)) return;
 				perror("fread");
 				exit(EXIT_FAILURE);
 			}
-			if (fprint_number(stdout, field->is_signed, field->num_size_exp, &num_buffer) < 0)
+			
+			// bytes to im
+			int_max_type im_in;
+			im_in.is_signed = (fields->is_delta ? field->delta_is_signed : field->is_signed);
+			im_from_bytes(&im_in, im_in_num_size_exp, bytes_in);
+			
+			// delta
+			int_max_type im_out;
+			if (fields->is_delta) {
+				// TODO
+			} else {
+				memcpy(&im_out, &im_in, sizeof(im_out));
+			}
+			
+			// output text
+			if (im_fprint(&im_out, stdout) < 0)
 				goto print_printf_err_and_exit;
 			if (idx != fields_count-1) {
 				if (printf("\t") < 0) goto print_printf_err_and_exit;
