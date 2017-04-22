@@ -465,7 +465,7 @@ void print_help(const char *prog_name) {
 		"Usage:\n"
 		"    %s -h\n"
 		"    %s (-c|-d) FORMAT\n"
-		"Binary encode/decode table of unsigned integer numbers"
+		"Binary encode/decode table of integer numbers"
 		"\n"
 		"\n"
 		"Options:\n"
